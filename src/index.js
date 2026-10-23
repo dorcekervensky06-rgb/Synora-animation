@@ -144,19 +144,25 @@ app.post("/api/generate", async (req, res) => {
       : 180;
 
     const prompt = [
-      "Tu es scénariste professionnel pour une série d'animation éducative intitulée Mike & Zoe.",
-      "Écris un scénario ORIGINAL en français, concret, cohérent et adapté à la durée demandée.",
-      "Ne donne pas de modèle générique : développe précisément l'idée et respecte ses détails.",
-      "Prévois une introduction, un problème clair, des indices, une progression logique, un climax et une conclusion satisfaisante.",
-      "Pour chaque scène, indique : durée estimée, décor et cadrage, actions détaillées, dialogues naturels attribués aux personnages, sons et musique.",
-      "Répartis le temps entre les scènes pour approcher la durée cible. Les dialogues et actions doivent être suffisamment développés pour cette durée.",
-      "Ne prétends pas avoir créé une vidéo ou des images. Fournis uniquement le scénario écrit.",
-      "Titre : " + String(title || "Nouvelle aventure").slice(0, 200),
-      "Style : " + String(style || "Aventure et humour").slice(0, 100),
-      "Durée cible : " + seconds + " secondes.",
-      "Idée originale : " + idea.trim().slice(0, 8000),
-      "Présente le résultat avec un titre, les informations de production, les scènes numérotées et une conclusion."
-    ].join("\\n\\n");
+  "Tu es le scénariste principal de SYNORA ANIMATION, une série d'animation professionnelle centrée sur Mike et Zoe.",
+  "Écris un scénario original, captivant, cohérent et adapté au public visé.",
+  "Respecte fidèlement l'idée de départ, le titre, le style et la durée demandée.",
+  "Construis une véritable histoire avec une introduction, un problème, des indices, des obstacles, un moment de suspense, une résolution logique et une conclusion.",
+  "Chaque scène doit faire avancer l'histoire. Évite les répétitions, les dialogues génériques et les événements sans explication.",
+  "Explique les découvertes importantes : qui intervient, pourquoi les événements se produisent et comment les personnages résolvent le problème.",
+  "Maintiens la continuité entre les scènes. Présente les nouveaux personnages et objets importants avant de les utiliser.",
+  "Écris des dialogues naturels et distincts pour chaque personnage.",
+  "Pour un contenu éducatif destiné aux enfants, privilégie la coopération, la curiosité, la réflexion et la résolution pacifique des conflits.",
+  "Pour chaque scène, indique la durée, le décor, les cadrages, les actions visibles, les dialogues attribués aux personnages, les sons et la musique.",
+  "Répartis les scènes selon la durée demandée. Le scénario doit être suffisamment développé pour approcher la durée cible.",
+  "Termine par une conclusion satisfaisante et une leçon naturelle, sans morale artificielle.",
+  "Ne donne pas seulement un résumé. N'affirme pas avoir créé une vidéo, une image ou une voix.",
+  "FORMAT : titre, série, style, durée, personnages principaux, scènes numérotées détaillées et conclusion.",
+  "Titre : " + String(title || "Nouvelle aventure").slice(0, 200),
+  "Style : " + String(style || "Aventure et humour").slice(0, 100),
+  "Durée cible : " + seconds + " secondes.",
+  "Idée originale : " + idea.trim().slice(0, 8000)
+].join("\n\n");
 
     const apiResponse = await fetch(
       "https://openrouter.ai/api/v1/chat/completions",
