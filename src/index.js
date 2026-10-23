@@ -2,8 +2,10 @@ const express = require("express");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+app.use(express.json({ limit: "1mb" }));
+
 app.get("/", (req, res) => {
-res.send(`<!DOCTYPE html>
+  res.send(`<!DOCTYPE html>
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
@@ -22,6 +24,7 @@ label{display:block;margin:17px 0 8px}
 input,textarea,select{width:100%;padding:13px;border-radius:8px;border:1px solid #62556d;background:#12121c;color:white;font-size:16px}
 textarea{min-height:120px}
 button{padding:13px 17px;border:0;border-radius:8px;background:#d8b46a;color:#16121b;font-weight:bold;cursor:pointer;margin:8px 5px 8px 0}
+button:disabled{opacity:.6;cursor:wait}
 .secondary{background:#383343;color:white}
 .result{white-space:pre-wrap;line-height:1.7;margin-top:20px;overflow-wrap:anywhere}
 .small{font-size:13px;color:#aaa}
@@ -31,7 +34,7 @@ button{padding:13px 17px;border:0;border-radius:8px;background:#d8b46a;color:#16
 <header><div class="logo">SYNORA ANIMATION</div></header>
 <main>
 <h1>Studio de création d'histoires</h1>
-<p>Transformez une idée en scénario organisé pour Mike &amp; Zoe.</p>
+<p>Transformez votre idée en scénario original avec l'intelligence artificielle.</p>
 <div class="card">
 <h2>Préparer un épisode</h2>
 <label for="title">Titre de l'épisode</label>
@@ -41,7 +44,7 @@ button{padding:13px 17px;border:0;border-radius:8px;background:#d8b46a;color:#16
 <label for="duration">Durée souhaitée</label>
 <select id="duration">
 <option value="60">Short — 1 minute</option>
-<option value="180">Épisode — 3 minutes</option>
+<option value="180" selected>Épisode — 3 minutes</option>
 <option value="300">Épisode — 5 minutes</option>
 </select>
 <label for="style">Style</label>
@@ -51,116 +54,167 @@ button{padding:13px 17px;border:0;border-radius:8px;background:#d8b46a;color:#16
 <option>Fantastique</option>
 <option>Drame</option>
 </select>
-<button onclick="generate()">Créer le scénario</button>
+<button id="generateBtn" onclick="generate()">Créer le scénario avec l'IA</button>
 <button class="secondary" onclick="downloadScript()">Télécharger en TXT</button>
 <div id="result" class="result" aria-live="polite"></div>
 </div>
-<p class="small">Prototype SYNORA Animation. Génération par modèles programmés, sans IA externe.</p>
+<p class="small">SYNORA ANIMATION — Série Mike &amp; Zoe. La génération IA nécessite une connexion API active.</p>
 </main>
 <script>
 let currentScript = "";
 
-function generate(){
-const title = document.getElementById("title").value.trim() || "Nouvelle aventure";
-const idea = document.getElementById("idea").value.trim();
-const duration = Number(document.getElementById("duration").value);
-const style = document.getElementById("style").value;
-const result = document.getElementById("result");
+async function generate() {
+  const title = document.getElementById("title").value.trim() || "Nouvelle aventure";
+  const idea = document.getElementById("idea").value.trim();
+  const duration = Number(document.getElementById("duration").value);
+  const style = document.getElementById("style").value;
+  const result = document.getElementById("result");
+  const button = document.getElementById("generateBtn");
 
-if(!idea){
-result.textContent="Veuillez écrire votre idée avant de créer le scénario.";
-return;
+  if (!idea) {
+    result.textContent = "Veuillez écrire votre idée avant de créer le scénario.";
+    return;
+  }
+
+  button.disabled = true;
+  result.textContent = "L'IA écrit votre scénario. Veuillez patienter...";
+  currentScript = "";
+
+  try {
+    const response = await fetch("/api/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title, idea, duration, style })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || "La génération a échoué.");
+    }
+
+    currentScript = data.script;
+    result.textContent = currentScript;
+  } catch (error) {
+    result.textContent = "Impossible de générer le scénario : " + error.message +
+      "\\n\\nVérifiez la configuration API et réessayez.";
+  } finally {
+    button.disabled = false;
+  }
 }
 
-const sceneCount = 5;
-const sceneSeconds = Math.floor(duration / sceneCount);
-const scenes = [
-{
-name:"SCÈNE 1 — INTRODUCTION",
-visual:"PLAN LARGE : montrer le quartier, les maisons et la rue. Mike et Zoe se promènent lorsqu'ils remarquent un événement inhabituel.",
-action:"Mike s'arrête brusquement. Zoe regarde dans la même direction. Ils s'approchent avec prudence.",
-mike:"Zoe, regarde ça ! Je n'ai jamais rien vu de pareil.",
-zoe:"Approchons-nous doucement. Il faut d'abord comprendre ce qui se passe.",
-sound:"Ambiance de quartier, pas, musique de curiosité."
-},
-{
-name:"SCÈNE 2 — LE PROBLÈME",
-visual:"PLAN RAPPROCHÉ : mettre en évidence l'objet ou le personnage au centre de l'histoire.",
-action:"Les deux amis examinent la situation. Un nouvel événement complique leur recherche.",
-mike:"Bon, notre découverte semble avoir un problème.",
-zoe:"Au lieu de deviner, cherchons des indices. Chaque détail peut compter.",
-sound:"Petit bruit mystérieux, musique de suspense légère."
-},
-{
-name:"SCÈNE 3 — L'INDICE",
-visual:"GROS PLAN : montrer un détail qui pourrait expliquer le mystère.",
-action:"Zoe remarque un indice. Mike essaie de comprendre son importance et propose une hypothèse.",
-mike:"Attends, ce détail pourrait nous donner la réponse !",
-zoe:"C'est possible. Mais vérifions avant de tirer une conclusion.",
-sound:"Bip ou son de découverte, musique qui devient plus vive."
-},
-{
-name:"SCÈNE 4 — L'ACTION",
-visual:"PLAN D'ENSEMBLE : montrer Mike et Zoe en train de tester leur solution.",
-action:"Les amis unissent leurs compétences. Leur première tentative ne fonctionne pas complètement, mais ils adaptent leur plan.",
-mike:"Ça n'a pas marché comme prévu ! On réessaie autrement ?",
-zoe:"Oui. Si nous coopérons et réfléchissons, nous pouvons trouver une solution.",
-sound:"Bruits d'action, musique rythmée, effet sonore au moment décisif."
-},
-{
-name:"SCÈNE 5 — LA CONCLUSION",
-visual:"PLAN LARGE puis PLAN RAPPROCHÉ : montrer le résultat de l'aventure et les réactions des personnages.",
-action:"Le problème est résolu, ou un dernier indice annonce une prochaine aventure. Mike et Zoe partagent ce qu'ils ont appris.",
-mike:"Quelle aventure ! Je crois que nous venons de découvrir quelque chose d'important.",
-zoe:"Et ce n'est que le début. La prochaine fois, nous serons encore mieux préparés !",
-sound:"Musique de conclusion, ambiance qui s'apaise, petit son final mystérieux."
-}
-];
+function downloadScript() {
+  if (!currentScript) {
+    document.getElementById("result").textContent =
+      "Générez d'abord un scénario.";
+    return;
+  }
 
-let script = "SYNORA ANIMATION — SCÉNARIO\\n";
-script += "SÉRIE : MIKE & ZOE\\n";
-script += "TITRE : " + title + "\\n";
-script += "STYLE : " + style + "\\n";
-script += "DURÉE CIBLE : " + duration + " secondes\\n";
-script += "IDÉE ORIGINALE : " + idea + "\\n";
-script += "\\n========================================\\n";
-
-scenes.forEach(function(scene,index){
-script += "\\n" + scene.name + "\\n";
-script += "DURÉE ESTIMÉE : " + sceneSeconds + " secondes\\n";
-script += "VISUEL / CADRAGE : " + scene.visual + "\\n";
-script += "ACTION : " + scene.action + "\\n";
-script += "MIKE : " + scene.mike + "\\n";
-script += "ZOE : " + scene.zoe + "\\n";
-script += "SON : " + scene.sound + "\\n";
-script += "----------------------------------------\\n";
-});
-
-script += "\\nFIN DU SCÉNARIO\\n";
-script += "NOTE DE PRODUCTION : ce document est une base à adapter à l'idée originale. Les scènes et dialogues utilisent des modèles programmés. Ce n'est pas encore une génération par intelligence artificielle.";
-
-currentScript = script;
-result.textContent = script;
-}
-
-function downloadScript(){
-if(!currentScript){
-document.getElementById("result").textContent="Créez d'abord un scénario.";
-return;
-}
-const blob = new Blob([currentScript],{type:"text/plain;charset=utf-8"});
-const url = URL.createObjectURL(blob);
-const link = document.createElement("a");
-link.href = url;
-link.download = "SYNORA-Mike-Zoe-scenario.txt";
-link.click();
-setTimeout(function(){URL.revokeObjectURL(url);},1000);
+  const blob = new Blob([currentScript], {
+    type: "text/plain;charset=utf-8"
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "SYNORA-Mike-Zoe-scenario.txt";
+  link.click();
+  URL.revokeObjectURL(url);
 }
 </script>
 </body>
 </html>`);
 });
 
-app.listen(PORT,"0.0.0.0",()=>{
-console.log("SYNORA Animation fonctionne sur le port "+PORT);
+app.post("/api/generate", async (req, res) => {
+  try {
+    const { title, idea, duration, style } = req.body || {};
+
+    if (typeof idea !== "string" || !idea.trim()) {
+      return res.status(400).json({ error: "Veuillez fournir une idée d'histoire." });
+    }
+
+    if (!process.env.OPENROUTER_API_KEY) {
+      return res.status(500).json({
+        error: "La clé API OpenRouter n'est pas configurée sur le serveur."
+      });
+    }
+
+    const seconds = [60, 180, 300].includes(Number(duration))
+      ? Number(duration)
+      : 180;
+
+    const prompt = [
+      "Tu es scénariste professionnel pour une série d'animation éducative intitulée Mike & Zoe.",
+      "Écris un scénario ORIGINAL en français, concret, cohérent et adapté à la durée demandée.",
+      "Ne donne pas de modèle générique : développe précisément l'idée et respecte ses détails.",
+      "Prévois une introduction, un problème clair, des indices, une progression logique, un climax et une conclusion satisfaisante.",
+      "Pour chaque scène, indique : durée estimée, décor et cadrage, actions détaillées, dialogues naturels attribués aux personnages, sons et musique.",
+      "Répartis le temps entre les scènes pour approcher la durée cible. Les dialogues et actions doivent être suffisamment développés pour cette durée.",
+      "Ne prétends pas avoir créé une vidéo ou des images. Fournis uniquement le scénario écrit.",
+      "Titre : " + String(title || "Nouvelle aventure").slice(0, 200),
+      "Style : " + String(style || "Aventure et humour").slice(0, 100),
+      "Durée cible : " + seconds + " secondes.",
+      "Idée originale : " + idea.trim().slice(0, 8000),
+      "Présente le résultat avec un titre, les informations de production, les scènes numérotées et une conclusion."
+    ].join("\\n\\n");
+
+    const apiResponse = await fetch(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          "Authorization": "Bearer " + process.env.OPENROUTER_API_KEY,
+          "Content-Type": "application/json",
+          "X-OpenRouter-Title": "SYNORA Animation"
+        },
+        body: JSON.stringify({
+          model: "openrouter/free",
+          messages: [
+            {
+              role: "system",
+              content: "Tu écris des scénarios d'animation originaux, détaillés et professionnels en français."
+            },
+            { role: "user", content: prompt }
+          ],
+          temperature: 0.8,
+          max_tokens: 5000
+        })
+      }
+    );
+
+    const data = await apiResponse.json();
+
+    if (!apiResponse.ok) {
+      console.error("OpenRouter error:", apiResponse.status, data);
+      return res.status(502).json({
+        error: apiResponse.status === 401
+          ? "Clé API invalide ou non autorisée."
+          : apiResponse.status === 429
+          ? "Limite de requêtes atteinte. Réessayez plus tard."
+          : "OpenRouter n'a pas pu répondre. Vérifiez le modèle et votre compte."
+      });
+    }
+
+    const script = data.choices?.[0]?.message?.content;
+
+    if (!script) {
+      console.error("OpenRouter returned no text:", data);
+      return res.status(502).json({
+        error: "L'IA n'a pas renvoyé de texte. Réessayez."
+      });
+    }
+
+    res.json({
+      script: "SYNORA ANIMATION — SCÉNARIO GÉNÉRÉ PAR IA\\n\\n" + script
+    });
+  } catch (error) {
+    console.error("Generation error:", error.message);
+    res.status(500).json({
+      error: "Erreur du serveur pendant la génération. Réessayez."
+    });
+  }
+});
+
+app.listen(PORT, "0.0.0.0", () => {
+  console.log("SYNORA Animation fonctionne sur le port " + PORT);
 });
