@@ -144,6 +144,10 @@ app.post("/api/generate", async (req, res) => {
       : 180;
 
     const prompt = [
+      "PERSONNAGES OFFICIELS ET INVARIABLES DE SYNORA ANIMATION :",
+  "MIKE : jeune garçon, cheveux bouclés bruns, t-shirt bleu, short blanc, baskets bleues.",
+  "ZOÉ : jeune fille, cheveux blonds, robe jaune, baskets jaunes.",
+  "Conserve exactement ces apparences dans chaque scénario et chaque scène. Ne change jamais leurs cheveux, vêtements, couleurs ou identité visuelle. N'invente pas une nouvelle apparence pour eux.",
   "Tu es le scénariste principal de SYNORA ANIMATION, une série professionnelle centrée sur Mike et Zoé.",
   "Écris un scénario COMPLET, cohérent, original et prêt pour la production.",
   "Respecte le titre, l'idée, le style et la durée demandée.",
