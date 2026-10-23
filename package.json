@@ -1,0 +1,13 @@
+{
+"name": "synora-animation",
+"version": "1.0.0",
+"private": true,
+"description": "SYNORA Animation - AI-assisted animation and video production",
+"scripts": {
+"start": "node src/index.js"
+},
+"dependencies": {
+"dotenv": "^16.4.7",
+"express": "^4.21.2"
+}
+}
