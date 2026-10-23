@@ -144,26 +144,23 @@ app.post("/api/generate", async (req, res) => {
       : 180;
 
     const prompt = [
-  "Tu es le scénariste principal de SYNORA ANIMATION, une série d'animation professionnelle centrée sur Mike et Zoe.",
-  "Écris un scénario original, captivant, cohérent et adapté au public visé.",
-  "Respecte fidèlement l'idée de départ, le titre, le style et la durée demandée.",
-  "Construis une véritable histoire avec une introduction, un problème, des indices, des obstacles, un moment de suspense, une résolution logique et une conclusion.",
-  "Chaque scène doit faire avancer l'histoire. Évite les répétitions, les dialogues génériques et les événements sans explication.",
-  "Explique les découvertes importantes : qui intervient, pourquoi les événements se produisent et comment les personnages résolvent le problème.",
-  "Maintiens la continuité entre les scènes. Présente les nouveaux personnages et objets importants avant de les utiliser.",
-  "Écris des dialogues naturels et distincts pour chaque personnage.",
-  "Pour un contenu éducatif destiné aux enfants, privilégie la coopération, la curiosité, la réflexion et la résolution pacifique des conflits.",
-  "Pour chaque scène, indique la durée, le décor, les cadrages, les actions visibles, les dialogues attribués aux personnages, les sons et la musique.",
-  "Répartis les scènes selon la durée demandée. Le scénario doit être suffisamment développé pour approcher la durée cible.",
-  "Termine par une conclusion satisfaisante et une leçon naturelle, sans morale artificielle.",
-  "Ne donne pas seulement un résumé. N'affirme pas avoir créé une vidéo, une image ou une voix.",
-  "FORMAT : titre, série, style, durée, personnages principaux, scènes numérotées détaillées et conclusion.",
+  "Tu es le scénariste principal de SYNORA ANIMATION, une série professionnelle centrée sur Mike et Zoé.",
+  "Écris un scénario COMPLET, cohérent, original et prêt pour la production.",
+  "Respecte le titre, l'idée, le style et la durée demandée.",
+  "IMPORTANT : le scénario doit avoir un début, un problème, une enquête, des obstacles, un suspense, une résolution expliquée et une vraie conclusion. Ne termine jamais au milieu d'une scène ou d'une phrase.",
+  "Adapte la longueur à la durée. Pour 60 secondes : 3 à 4 scènes courtes. Pour 180 secondes : 5 à 6 scènes. Pour 300 secondes : 8 à 10 scènes.",
+  "Pour chaque scène, indique : numéro, durée, décor, cadrages caméra, actions visibles, dialogues naturels avec le nom du personnage, effets sonores et musique.",
+  "Présente les personnages importants et explique les événements. Garde une continuité logique entre toutes les scènes.",
+  "Pour un contenu éducatif destiné aux enfants, favorise la curiosité, la coopération, la réflexion et la résolution pacifique des conflits.",
+  "Termine par une conclusion complète et, si approprié, une leçon naturelle.",
+  "FORMAT OBLIGATOIRE : titre, série, style, durée totale, personnages principaux, scènes numérotées détaillées, conclusion finale.",
+  "Sois détaillé mais concis pour pouvoir terminer le scénario dans une seule réponse. Ne répète pas les mêmes informations. N'ajoute aucun commentaire hors scénario.",
   "Titre : " + String(title || "Nouvelle aventure").slice(0, 200),
   "Style : " + String(style || "Aventure et humour").slice(0, 100),
   "Durée cible : " + seconds + " secondes.",
   "Idée originale : " + idea.trim().slice(0, 8000)
 ].join("\n\n");
-
+    
     const apiResponse = await fetch(
       "https://openrouter.ai/api/v1/chat/completions",
       {
