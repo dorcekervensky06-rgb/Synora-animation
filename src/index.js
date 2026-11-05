@@ -832,17 +832,80 @@ $("extractDialogues").addEventListener("click", () => {
   const dialogueLines = lines.filter(line =>
     /^\\s*(MIKE|ZO[ÉE]|ZOE|LUMI|M\\.?\\s*L[ÉE]ON|BROOK|M\\.?\\s*DARK)\\s*:/i.test(line)
   );
+if (!("speechSynthesis" in window)) {
+  return alert("La lecture vocale n'est pas disponible sur ce navigateur.");
+}
 
-  currentDialogues = dialogueLines.join("\\n");
+speechSynthesis.cancel();
 
-  $("dialogues").textContent = currentDialogues ||
-    "Aucune réplique reconnue. Vérifie le format des dialogues.";
-
+const utterance = new SpeechSynthesisUtterance(currentDialogues);
+utterance.lang = "fr-FR";
+utterance.rate = 0.95;
+speechSynthesis.speak(utterance);
 });
 
-$("readDialogues").addEventListener("click", () => {
-  if (!currentDialogues) {
-    return alert("Extrais les dialogues avant de lancer la lecture.");
-  }
+$("stopVoice").addEventListener("click", () => {
+  if ("speechSynthesis" in window) speechSynthesis.cancel();
+});
 
-  if (!("speechSynthesis" in window)
+function formatSrtTime(seconds) {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = Math.floor(seconds % 60);
+  const millis = Math.floor((seconds % 1) * 1000);
+
+  return [
+    String(hours).padStart(2, "0"),
+    String(minutes).padStart(2, "0"),
+    String(secs).padStart(2, "0")
+  ].join(":") + "," + String(millis).padStart(3, "0");
+}
+
+$("makeSrt").addEventListener("click", () => {
+  if (!currentScenario) return alert("Aucun scénario disponible.");
+
+  const duration = Number($("duration").value);
+  const lines = currentScenario
+    .split(/\\r?\\n/)
+    .map(line => line.trim())
+    .filter(line => line.length > 0);
+
+  const dialogueLines = lines.filter(line =>
+    /^\\s*(MIKE|ZO[ÉE]|ZOE|LUMI|M\\.?\\s*L[ÉE]ON|BROOK|M\\.?\\s*DARK)\\s*:/i.test(line)
+  );
+
+  const subtitles = dialogueLines.length ? dialogueLines : lines;
+  const secondsPerLine = duration / Math.max(subtitles.length, 1);
+
+  currentSrt = subtitles.map((line, index) => {
+    const start = index * secondsPerLine;
+    const end = Math.min((index + 1) * secondsPerLine, duration);
+
+    return [
+      index + 1,
+      formatSrtTime(start) + " --> " + formatSrtTime(end),
+      line,
+      ""
+    ].join("\\n");
+  }).join("\\n");
+
+  $("srtStatus").textContent =
+    subtitles.length + " sous-titres créés. Timing estimatif : vérification manuelle nécessaire.";
+  $("srtStatus").className = "status success";
+});
+
+$("downloadSrt").addEventListener("click", () => {
+  if (!currentSrt) return alert("Crée les sous-titres avant de télécharger.");
+
+  downloadFile(
+    safeFilename($("title").value) + ".srt",
+    currentSrt,
+    "text/plain;charset=utf-8"
+  );
+});
+
+checkSession();
+</script>
+
+</body>
+</html>`;
