@@ -1,227 +1,848 @@
+require("dotenv").config();
+
 const express = require("express");
+const crypto = require("crypto");
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(express.json({ limit: "1mb" }));
+app.set("trust proxy", 1);
+app.disable("x-powered-by");
 
-app.get("/", (req, res) => {
-  res.send(`<!DOCTYPE html>
+app.use(express.json({ limit: "100kb" }));
+
+// --------------------------------------------------
+// CONFIGURATION ET SÉCURITÉ
+// --------------------------------------------------
+
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+const SESSION_SECRET = process.env.SESSION_SECRET;
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+
+const SESSION_DURATION = 12 * 60 * 60 * 1000;
+const COOKIE_NAME = "synora_admin";
+
+if (!ADMIN_PASSWORD || ADMIN_PASSWORD.length < 12) {
+  console.error("ERREUR : ADMIN_PASSWORD doit contenir au moins 12 caractères.");
+  process.exit(1);
+}
+
+if (!SESSION_SECRET || Buffer.byteLength(SESSION_SECRET) < 32) {
+  console.error("ERREUR : SESSION_SECRET doit contenir au moins 32 octets.");
+  process.exit(1);
+}
+
+app.use((req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  res.setHeader("Cache-Control", "no-store");
+  next();
+});
+
+// --------------------------------------------------
+// AUTHENTIFICATION PRIVÉE
+// --------------------------------------------------
+
+function createSignature(value) {
+  return crypto
+    .createHmac("sha256", SESSION_SECRET)
+    .update(value)
+    .digest("base64url");
+}
+
+function createSession() {
+  const payload = {
+    role: "admin",
+    expires: Date.now() + SESSION_DURATION,
+    nonce: crypto.randomBytes(16).toString("hex")
+  };
+
+  const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  return `${encoded}.${createSignature(encoded)}`;
+}
+
+function verifySession(token) {
+  if (!token || typeof token !== "string") return false;
+
+  const parts = token.split(".");
+  if (parts.length !== 2) return false;
+
+  const [encoded, signature] = parts;
+  const expected = createSignature(encoded);
+
+  const receivedBuffer = Buffer.from(signature);
+  const expectedBuffer = Buffer.from(expected);
+
+  if (
+    receivedBuffer.length !== expectedBuffer.length ||
+    !crypto.timingSafeEqual(receivedBuffer, expectedBuffer)
+  ) {
+    return false;
+  }
+
+  try {
+    const payload = JSON.parse(
+      Buffer.from(encoded, "base64url").toString("utf8")
+    );
+
+    return (
+      payload.role === "admin" &&
+      Number.isFinite(payload.expires) &&
+      payload.expires > Date.now()
+    );
+  } catch {
+    return false;
+  }
+}
+
+function getCookie(req, name) {
+  const cookies = req.headers.cookie || "";
+
+  for (const item of cookies.split(";")) {
+    const [key, ...value] = item.trim().split("=");
+
+    if (key === name) {
+      return value.join("=");
+    }
+  }
+
+  return null;
+}
+
+function isSecureRequest(req) {
+  return req.secure || req.headers["x-forwarded-proto"] === "https";
+}
+
+function setSessionCookie(req, res, token) {
+  const secure = isSecureRequest(req) ? "; Secure" : "";
+
+  res.setHeader(
+    "Set-Cookie",
+    `${COOKIE_NAME}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_DURATION / 1000}${secure}`
+  );
+}
+
+function clearSessionCookie(req, res) {
+  const secure = isSecureRequest(req) ? "; Secure" : "";
+
+  res.setHeader(
+    "Set-Cookie",
+    `${COOKIE_NAME}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${secure}`
+  );
+}
+
+function requireAdmin(req, res, next) {
+  const token = getCookie(req, COOKIE_NAME);
+
+  if (!verifySession(token)) {
+    return res.status(401).json({
+      success: false,
+      error: "Session expirée. Veuillez vous reconnecter."
+    });
+  }
+
+  next();
+}
+
+// Protection simple contre les tentatives répétées de connexion.
+// Cette limite est réinitialisée lors du redémarrage du serveur.
+const loginAttempts = new Map();
+const MAX_ATTEMPTS = 5;
+const BLOCK_DURATION = 15 * 60 * 1000;
+
+function checkLoginLimit(ip) {
+  const now = Date.now();
+  const record = loginAttempts.get(ip);
+
+  if (!record) return true;
+
+  if (record.blockedUntil && record.blockedUntil > now) {
+    return false;
+  }
+
+  if (record.blockedUntil && record.blockedUntil <= now) {
+    loginAttempts.delete(ip);
+  }
+
+  return true;
+}
+
+function recordFailedLogin(ip) {
+  const now = Date.now();
+  const record = loginAttempts.get(ip) || {
+    count: 0,
+    blockedUntil: 0
+  };
+
+  record.count++;
+
+  if (record.count >= MAX_ATTEMPTS) {
+    record.blockedUntil = now + BLOCK_DURATION;
+    record.count = 0;
+  }
+
+  loginAttempts.set(ip, record);
+}
+
+function clearFailedLogins(ip) {
+  loginAttempts.delete(ip);
+}
+
+// Vérification simple de l'origine des requêtes qui modifient des données.
+function checkSameOrigin(req, res, next) {
+  const origin = req.headers.origin;
+
+  if (origin) {
+    try {
+      if (new URL(origin).host !== req.get("host")) {
+        return res.status(403).json({
+          success: false,
+          error: "Origine non autorisée."
+        });
+      }
+    } catch {
+      return res.status(403).json({
+        success: false,
+        error: "Origine invalide."
+      });
+    }
+  }
+
+  next();
+}
+
+// --------------------------------------------------
+// PAGE DE CONNEXION ET ATELIER
+// --------------------------------------------------
+
+const HTML = `<!DOCTYPE html>
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SYNORA Animation Studio</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#10131c">
+<title>SYNORA Animation — Atelier privé</title>
+
 <style>
-*{box-sizing:border-box}
-body{margin:0;background:#101018;color:#fff;font-family:Arial,sans-serif}
-header{padding:20px 6%;border-bottom:1px solid #39313e}
-.logo{color:#d8b46a;font-size:23px;font-weight:bold}
-main{max-width:900px;margin:30px auto;padding:20px}
-h1,h2{color:#d8b46a}
-p{line-height:1.6;color:#d1ced8}
-.card{background:#1c1c29;border:1px solid #494052;border-radius:16px;padding:22px;margin:20px 0}
-label{display:block;margin:17px 0 8px}
-input,textarea,select{width:100%;padding:13px;border-radius:8px;border:1px solid #62556d;background:#12121c;color:white;font-size:16px}
-textarea{min-height:120px}
-button{padding:13px 17px;border:0;border-radius:8px;background:#d8b46a;color:#16121b;font-weight:bold;cursor:pointer;margin:8px 5px 8px 0}
-button:disabled{opacity:.6;cursor:wait}
-.secondary{background:#383343;color:white}
-.result{white-space:pre-wrap;line-height:1.7;margin-top:20px;overflow-wrap:anywhere}
-.small{font-size:13px;color:#aaa}
+:root {
+  --bg: #10131c;
+  --panel: #191e2b;
+  --panel2: #202738;
+  --gold: #e5bd65;
+  --text: #f4f2ed;
+  --muted: #a5adbd;
+  --border: #30394b;
+  --danger: #ff7777;
+  --success: #79d9a4;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: Arial, sans-serif;
+}
+
+button, input, textarea, select {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+.container {
+  width: min(1100px, 94%);
+  margin: auto;
+  padding: 24px 0 60px;
+}
+
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 15px;
+  border-bottom: 1px solid var(--border);
+  padding: 12px 0 22px;
+  margin-bottom: 25px;
+}
+
+.logo {
+  color: var(--gold);
+  font-size: 25px;
+  font-weight: bold;
+  letter-spacing: 2px;
+}
+
+.subtitle {
+  color: var(--muted);
+  font-size: 13px;
+  margin-top: 5px;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 22px;
+  margin-bottom: 20px;
+}
+
+h1, h2, h3 { margin-top: 0; }
+
+h2 {
+  font-size: 19px;
+  color: var(--gold);
+}
+
+label {
+  display: block;
+  margin: 15px 0 8px;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+input, textarea, select {
+  width: 100%;
+  color: var(--text);
+  background: #101521;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  outline: none;
+}
+
+input:focus, textarea:focus, select:focus {
+  border-color: var(--gold);
+}
+
+textarea {
+  min-height: 120px;
+  resize: vertical;
+}
+
+.btn {
+  border: 0;
+  border-radius: 8px;
+  padding: 12px 16px;
+  font-weight: bold;
+  background: var(--gold);
+  color: #151515;
+  margin-top: 15px;
+}
+
+.btn.secondary {
+  color: var(--text);
+  background: var(--panel2);
+  border: 1px solid var(--border);
+}
+
+.btn.danger {
+  background: #612d35;
+  color: white;
+}
+
+.btn:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+.full { width: 100%; }
+
+.status {
+  color: var(--muted);
+  font-size: 13px;
+  margin-top: 12px;
+  min-height: 18px;
+}
+
+.error { color: var(--danger); }
+.success { color: var(--success); }
+
+.hidden { display: none !important; }
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 15px;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.actions .btn { margin-top: 8px; }
+
+.result {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: #101521;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 18px;
+  line-height: 1.7;
+  min-height: 120px;
+  max-height: 600px;
+  overflow: auto;
+}
+
+.episode {
+  border: 1px solid var(--border);
+  background: #101521;
+  border-radius: 8px;
+  padding: 13px;
+  margin: 10px 0;
+}
+
+.small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.login {
+  width: min(430px, 94%);
+  margin: 10vh auto;
+}
+
+footer {
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 30px;
+}
+
+@media(max-width: 650px) {
+  .grid { grid-template-columns: 1fr; }
+  header { align-items: flex-start; }
+  .logo { font-size: 21px; }
+  .panel { padding: 16px; }
+}
 </style>
 </head>
+
 <body>
-<header><div class="logo">SYNORA ANIMATION</div></header>
-<main>
-<h1>Studio de création d'histoires</h1>
-<p>Transformez votre idée en scénario original avec l'intelligence artificielle.</p>
-<div class="card">
-<h2>Préparer un épisode</h2>
-<label for="title">Titre de l'épisode</label>
-<input id="title" placeholder="Ex. Le robot sans mémoire">
-<label for="idea">Votre idée</label>
-<textarea id="idea" placeholder="Décrivez l'histoire, les personnages et le problème..."></textarea>
-<label for="duration">Durée souhaitée</label>
-<select id="duration">
-<option value="60">Short — 1 minute</option>
-<option value="180" selected>Épisode — 3 minutes</option>
-<option value="300">Épisode — 5 minutes</option>
-</select>
-<label for="style">Style</label>
-<select id="style">
-<option>Aventure et humour</option>
-<option>Éducatif</option>
-<option>Fantastique</option>
-<option>Drame</option>
-</select>
-<button id="generateBtn" onclick="generate()">Créer le scénario avec l'IA</button>
-<button class="secondary" onclick="downloadScript()">Télécharger en TXT</button>
-<div id="result" class="result" aria-live="polite"></div>
-</div>
-<p class="small">SYNORA ANIMATION — Série Mike &amp; Zoe. La génération IA nécessite une connexion API active.</p>
+
+<section id="loginScreen" class="login hidden">
+  <div class="panel">
+    <div class="logo">SYNORA</div>
+    <p class="subtitle">ANIMATION — ESPACE ADMINISTRATEUR PRIVÉ</p>
+
+    <h2 style="margin-top:30px">Connexion sécurisée</h2>
+
+    <form id="loginForm">
+      <label for="password">Mot de passe administrateur</label>
+      <input id="password" type="password"
+        autocomplete="current-password" required>
+
+      <button class="btn full" id="loginButton" type="submit">
+        Se connecter
+      </button>
+    </form>
+
+    <div id="loginStatus" class="status"></div>
+    <p class="small">Accès réservé à l'administrateur de SYNORA Animation.</p>
+  </div>
+</section>
+
+<main id="appScreen" class="container hidden">
+
+<header>
+  <div>
+    <div class="logo">SYNORA ANIMATION</div>
+    <div class="subtitle">Atelier privé de création audiovisuelle</div>
+  </div>
+
+  <button class="btn danger" id="logoutButton">Déconnexion</button>
+</header>
+
+<section class="panel">
+  <h2>01 — Générateur de scénarios</h2>
+  <p class="small">
+    Crée des scénarios structurés pour les épisodes de tes séries.
+  </p>
+
+  <label for="title">Titre de l'épisode</label>
+  <input id="title" placeholder="Ex. Mike et Zoé : Le secret de la ville">
+
+  <label for="idea">Idée principale de l'histoire</label>
+  <textarea id="idea" placeholder="Décris l'histoire, le problème, le message éducatif et les événements souhaités..."></textarea>
+
+  <div class="grid">
+    <div>
+      <label for="duration">Durée</label>
+      <select id="duration">
+        <option value="60">60 secondes</option>
+        <option value="180" selected>180 secondes</option>
+        <option value="300">300 secondes</option>
+      </select>
+    </div>
+
+    <div>
+      <label for="style">Style</label>
+      <select id="style">
+        <option>Aventure éducative</option>
+        <option>Humour et aventure</option>
+        <option>Mystère</option>
+        <option>Science et découverte</option>
+        <option>Éducation citoyenne</option>
+        <option>Conte fantastique</option>
+      </select>
+    </div>
+  </div>
+
+  <button class="btn full" id="generateButton">
+    Générer le scénario
+  </button>
+
+  <div id="generateStatus" class="status"></div>
+</section>
+
+<section class="panel">
+  <h2>02 — Scénario produit</h2>
+
+  <div id="scenario" class="result">Ton scénario apparaîtra ici après la génération.</div>
+
+  <div class="actions">
+    <button class="btn" id="downloadTxt">Télécharger TXT</button>
+    <button class="btn secondary" id="saveEpisode">Enregistrer l'épisode</button>
+    <button class="btn secondary" id="copyScenario">Copier</button>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>03 — Atelier des dialogues</h2>
+  <p class="small">
+    Extraction des répliques et lecture vocale par le navigateur.
+    La lecture ne produit pas de fichier audio MP3.
+  </p>
+
+  <div class="actions">
+    <button class="btn secondary" id="extractDialogues">Extraire les dialogues</button>
+    <button class="btn secondary" id="readDialogues">Lire les dialogues</button>
+    <button class="btn danger" id="stopVoice">Arrêter la lecture</button>
+  </div>
+
+  <div id="dialogues" class="result">Les dialogues extraits apparaîtront ici.</div>
+</section>
+
+<section class="panel">
+  <h2>04 — Sous-titres SRT</h2>
+  <p class="small">
+    Création d'une première base de sous-titres avec timing estimatif.
+    Les temps doivent être vérifiés et corrigés avant utilisation.
+  </p>
+
+  <button class="btn secondary" id="makeSrt">Créer les sous-titres</button>
+  <button class="btn secondary" id="downloadSrt">Télécharger SRT</button>
+  <div id="srtStatus" class="status"></div>
+</section>
+
+<section class="panel">
+  <h2>05 — Bibliothèque locale</h2>
+  <p class="small">
+    Les épisodes enregistrés ici restent dans le navigateur de cet appareil.
+  </p>
+  <div id="library"></div>
+</section>
+
+<footer>
+  SYNORA TECH — SYNORA ANIMATION · Espace privé de production
+</footer>
+
 </main>
+
 <script>
-let currentScript = "";
+const $ = (id) => document.getElementById(id);
 
-async function generate() {
-  const title = document.getElementById("title").value.trim() || "Nouvelle aventure";
-  const idea = document.getElementById("idea").value.trim();
-  const duration = Number(document.getElementById("duration").value);
-  const style = document.getElementById("style").value;
-  const result = document.getElementById("result");
-  const button = document.getElementById("generateBtn");
+let currentScenario = "";
+let currentSrt = "";
+let currentDialogues = "";
 
-  if (!idea) {
-    result.textContent = "Veuillez écrire votre idée avant de créer le scénario.";
-    return;
+function showLogin() {
+  $("loginScreen").classList.remove("hidden");
+  $("appScreen").classList.add("hidden");
+}
+
+function showApp() {
+  $("loginScreen").classList.add("hidden");
+  $("appScreen").classList.remove("hidden");
+  renderLibrary();
+}
+
+async function api(path, options = {}) {
+  const response = await fetch(path, {
+    credentials: "same-origin",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers || {})
+    }
+  });
+
+  if (response.status === 401 && path !== "/api/login") {
+    showLogin();
+    throw new Error("Session expirée. Reconnecte-toi.");
   }
 
+  return response;
+}
+
+async function checkSession() {
+  try {
+    const response = await api("/api/me");
+    const data = await response.json();
+
+    if (data.authenticated) showApp();
+    else showLogin();
+  } catch {
+    showLogin();
+  }
+}
+
+$("loginForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+
+  const button = $("loginButton");
+  const status = $("loginStatus");
+
   button.disabled = true;
-  result.textContent = "L'IA écrit votre scénario. Veuillez patienter...";
-  currentScript = "";
+  status.textContent = "Vérification...";
+  status.className = "status";
 
   try {
-    const response = await fetch("/api/generate", {
+    const response = await api("/api/login", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title, idea, duration, style })
+      body: JSON.stringify({
+        password: $("password").value
+      })
     });
 
     const data = await response.json();
 
     if (!response.ok) {
-      throw new Error(data.error || "La génération a échoué.");
+      throw new Error(data.error || "Connexion impossible.");
     }
 
-    currentScript = data.script;
-    result.textContent = currentScript;
+    $("password").value = "";
+    status.textContent = "";
+    showApp();
   } catch (error) {
-    result.textContent = "Impossible de générer le scénario : " + error.message +
-      "\\n\\nVérifiez la configuration API et réessayez.";
+    status.textContent = error.message;
+    status.className = "status error";
   } finally {
     button.disabled = false;
   }
-}
+});
 
-function downloadScript() {
-  if (!currentScript) {
-    document.getElementById("result").textContent =
-      "Générez d'abord un scénario.";
+$("logoutButton").addEventListener("click", async () => {
+  try {
+    await api("/api/logout", { method: "POST", body: "{}" });
+  } finally {
+    speechSynthesis.cancel();
+    currentScenario = "";
+    currentSrt = "";
+    currentDialogues = "";
+    showLogin();
+  }
+});
+
+$("generateButton").addEventListener("click", async () => {
+  const title = $("title").value.trim();
+  const idea = $("idea").value.trim();
+
+  if (!title || !idea) {
+    $("generateStatus").textContent =
+      "Ajoute un titre et une idée avant de générer.";
+    $("generateStatus").className = "status error";
     return;
   }
 
-  const blob = new Blob([currentScript], {
-    type: "text/plain;charset=utf-8"
-  });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = "SYNORA-Mike-Zoe-scenario.txt";
-  link.click();
-  URL.revokeObjectURL(url);
-}
-</script>
-</body>
-</html>`);
-});
+  const button = $("generateButton");
+  button.disabled = true;
 
-app.post("/api/generate", async (req, res) => {
+  $("generateStatus").textContent =
+    "Génération en cours... Cela peut prendre un moment.";
+  $("generateStatus").className = "status";
+
   try {
-    const { title, idea, duration, style } = req.body || {};
-
-    if (typeof idea !== "string" || !idea.trim()) {
-      return res.status(400).json({ error: "Veuillez fournir une idée d'histoire." });
-    }
-
-    if (!process.env.OPENROUTER_API_KEY) {
-      return res.status(500).json({
-        error: "La clé API OpenRouter n'est pas configurée sur le serveur."
-      });
-    }
-
-    const seconds = [60, 180, 300].includes(Number(duration))
-      ? Number(duration)
-      : 180;
-
-    const prompt = [
-      "PERSONNAGES OFFICIELS ET INVARIABLES DE SYNORA ANIMATION :",
-  "MIKE : jeune garçon, cheveux bouclés bruns, t-shirt bleu, short blanc, baskets bleues.",
-  "ZOÉ : jeune fille, cheveux blonds, robe jaune, baskets jaunes.",
-  "Conserve exactement ces apparences dans chaque scénario et chaque scène. Ne change jamais leurs cheveux, vêtements, couleurs ou identité visuelle. N'invente pas une nouvelle apparence pour eux.",
-  "Tu es le scénariste principal de SYNORA ANIMATION, une série professionnelle centrée sur Mike et Zoé.",
-  "Écris un scénario COMPLET, cohérent, original et prêt pour la production.",
-  "Respecte le titre, l'idée, le style et la durée demandée.",
-  "IMPORTANT : le scénario doit avoir un début, un problème, une enquête, des obstacles, un suspense, une résolution expliquée et une vraie conclusion. Ne termine jamais au milieu d'une scène ou d'une phrase.",
-  "Adapte la longueur à la durée. Pour 60 secondes : 3 à 4 scènes courtes. Pour 180 secondes : 5 à 6 scènes. Pour 300 secondes : 8 à 10 scènes.",
-  "Pour chaque scène, indique : numéro, durée, décor, cadrages caméra, actions visibles, dialogues naturels avec le nom du personnage, effets sonores et musique.",
-  "Présente les personnages importants et explique les événements. Garde une continuité logique entre toutes les scènes.",
-  "Pour un contenu éducatif destiné aux enfants, favorise la curiosité, la coopération, la réflexion et la résolution pacifique des conflits.",
-  "Termine par une conclusion complète et, si approprié, une leçon naturelle.",
-  "FORMAT OBLIGATOIRE : titre, série, style, durée totale, personnages principaux, scènes numérotées détaillées, conclusion finale.",
-  "Sois détaillé mais concis pour pouvoir terminer le scénario dans une seule réponse. Ne répète pas les mêmes informations. N'ajoute aucun commentaire hors scénario.",
-  "Titre : " + String(title || "Nouvelle aventure").slice(0, 200),
-  "Style : " + String(style || "Aventure et humour").slice(0, 100),
-  "Durée cible : " + seconds + " secondes.",
-  "Idée originale : " + idea.trim().slice(0, 8000)
-].join("\n\n");
-    
-    const apiResponse = await fetch(
-      "https://openrouter.ai/api/v1/chat/completions",
-      {
-        method: "POST",
-        headers: {
-          "Authorization": "Bearer " + process.env.OPENROUTER_API_KEY,
-          "Content-Type": "application/json",
-          "X-OpenRouter-Title": "SYNORA Animation"
-        },
-        body: JSON.stringify({
-          model: "openrouter/free",
-          messages: [
-            {
-              role: "system",
-              content: "Tu écris des scénarios d'animation originaux, détaillés et professionnels en français."
-            },
-            { role: "user", content: prompt }
-          ],
-          temperature: 0.8,
-          max_tokens: 5000
-        })
-      }
-    );
-
-    const data = await apiResponse.json();
-
-    if (!apiResponse.ok) {
-      console.error("OpenRouter error:", apiResponse.status, data);
-      return res.status(502).json({
-        error: apiResponse.status === 401
-          ? "Clé API invalide ou non autorisée."
-          : apiResponse.status === 429
-          ? "Limite de requêtes atteinte. Réessayez plus tard."
-          : "OpenRouter n'a pas pu répondre. Vérifiez le modèle et votre compte."
-      });
-    }
-
-    const script = data.choices?.[0]?.message?.content;
-
-    if (!script) {
-      console.error("OpenRouter returned no text:", data);
-      return res.status(502).json({
-        error: "L'IA n'a pas renvoyé de texte. Réessayez."
-      });
-    }
-
-    res.json({
-      script: "SYNORA ANIMATION — SCÉNARIO GÉNÉRÉ PAR IA\\n\\n" + script
+    const response = await api("/api/generate", {
+      method: "POST",
+      body: JSON.stringify({
+        title,
+        idea,
+        duration: $("duration").value,
+        style: $("style").value
+      })
     });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || "Erreur de génération.");
+    }
+
+    currentScenario = data.scenario;
+    $("scenario").textContent = currentScenario;
+
+    $("generateStatus").textContent = "Scénario généré.";
+    $("generateStatus").className = "status success";
   } catch (error) {
-    console.error("Generation error:", error.message);
-    res.status(500).json({
-      error: "Erreur du serveur pendant la génération. Réessayez."
-    });
+    $("generateStatus").textContent = error.message;
+    $("generateStatus").className = "status error";
+  } finally {
+    button.disabled = false;
   }
 });
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log("SYNORA Animation fonctionne sur le port " + PORT);
+function downloadFile(filename, content, type) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+
+  link.href = url;
+  link.download = filename;
+  link.click();
+
+  URL.revokeObjectURL(url);
+}
+
+function safeFilename(value) {
+  return (value || "synora-episode")
+    .normalize("NFD")
+    .replace(/[\\u0300-\\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9_-]/g, "_")
+    .slice(0, 60);
+}
+
+$("downloadTxt").addEventListener("click", () => {
+  if (!currentScenario) return alert("Aucun scénario à télécharger.");
+
+  const filename = safeFilename($("title").value);
+  downloadFile(filename + ".txt", currentScenario, "text/plain;charset=utf-8");
 });
+
+$("copyScenario").addEventListener("click", async () => {
+  if (!currentScenario) return alert("Aucun scénario à copier.");
+
+  try {
+    await navigator.clipboard.writeText(currentScenario);
+    alert("Scénario copié.");
+  } catch {
+    alert("Copie impossible sur ce navigateur.");
+  }
+});
+
+// --------------------------------------------------
+// BIBLIOTHÈQUE LOCALE
+// --------------------------------------------------
+
+function getEpisodes() {
+  try {
+    return JSON.parse(localStorage.getItem("synora_episodes") || "[]");
+  } catch {
+    return [];
+  }
+}
+
+function renderLibrary() {
+  const episodes = getEpisodes();
+  const library = $("library");
+
+  library.replaceChildren();
+
+  if (!episodes.length) {
+    library.textContent = "Aucun épisode enregistré pour le moment.";
+    return;
+  }
+
+  episodes.forEach((episode, index) => {
+    const card = document.createElement("div");
+    card.className = "episode";
+
+    const title = document.createElement("strong");
+    title.textContent = episode.title;
+
+    const date = document.createElement("p");
+    date.className = "small";
+    date.textContent = episode.date;
+
+    const actions = document.createElement("div");
+    actions.className = "actions";
+
+    const open = document.createElement("button");
+    open.className = "btn secondary";
+    open.textContent = "Ouvrir";
+    open.addEventListener("click", () => {
+      currentScenario = episode.scenario;
+      $("scenario").textContent = currentScenario;
+      $("title").value = episode.title;
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    });
+
+    const remove = document.createElement("button");
+    remove.className = "btn danger";
+    remove.textContent = "Supprimer";
+    remove.addEventListener("click", () => {
+      const updated = getEpisodes();
+      updated.splice(index, 1);
+      localStorage.setItem("synora_episodes", JSON.stringify(updated));
+      renderLibrary();
+    });
+
+    actions.append(open, remove);
+    card.append(title, date, actions);
+    library.append(card);
+  });
+}
+
+$("saveEpisode").addEventListener("click", () => {
+  if (!currentScenario) return alert("Aucun scénario à enregistrer.");
+
+  const episodes = getEpisodes();
+
+  episodes.unshift({
+    title: $("title").value.trim() || "Épisode sans titre",
+    scenario: currentScenario,
+    date: new Date().toLocaleString("fr-FR")
+  });
+
+  try {
+    localStorage.setItem("synora_episodes", JSON.stringify(episodes));
+    renderLibrary();
+    alert("Épisode enregistré dans ce navigateur.");
+  } catch {
+    alert("Espace de stockage du navigateur insuffisant.");
+  }
+});
+
+// --------------------------------------------------
+// EXTRACTION ET LECTURE DES DIALOGUES
+// --------------------------------------------------
+
+$("extractDialogues").addEventListener("click", () => {
+  if (!currentScenario) return alert("Génère ou ouvre un scénario d'abord.");
+
+  const lines = currentScenario.split(/\\r?\\n/);
+  const dialogueLines = lines.filter(line =>
+    /^\\s*(MIKE|ZO[ÉE]|ZOE|LUMI|M\\.?\\s*L[ÉE]ON|BROOK|M\\.?\\s*DARK)\\s*:/i.test(line)
+  );
+
+  currentDialogues = dialogueLines.join("\\n");
+
+  $("dialogues").textContent = currentDialogues ||
+    "Aucune réplique reconnue. Vérifie le format des dialogues.";
+
+});
+
+$("readDialogues").addEventListener("click", () => {
+  if (!currentDialogues) {
+    return alert("Extrais les dialogues avant de lancer la lecture.");
+  }
+
+  if (!("speechSynthesis" in window)
