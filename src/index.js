@@ -864,18 +864,6 @@ $("readDialogues").addEventListener("click", () => {
   speechSynthesis.speak(utterance);
 });
 
-  if (!("speechSynthesis" in window)) {
-    return alert("Lecture vocale non disponible sur ce navigateur.");
-  }
-
-  speechSynthesis.cancel();
-
-  const utterance = new SpeechSynthesisUtterance(currentDialogues);
-  utterance.lang = "fr-FR";
-  utterance.rate = 0.95;
-  speechSynthesis.speak(utterance);
-});
-
 $("stopVoice").addEventListener("click", () => {
   speechSynthesis.cancel();
 });
