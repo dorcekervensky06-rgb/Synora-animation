@@ -849,10 +849,20 @@ $("extractDialogues").addEventListener("click", () => {
 
 $("readDialogues").addEventListener("click", () => {
   if (!currentDialogues) {
-  
-      "Aucun dialogue à lire. Extrais les dialogues d'abord."
-    );
+    return alert("Aucun dialogue à lire. Extrais les dialogues d'abord.");
   }
+
+  if (!("speechSynthesis" in window)) {
+    return alert("Lecture vocale non disponible sur ce navigateur.");
+  }
+
+  speechSynthesis.cancel();
+
+  const utterance = new SpeechSynthesisUtterance(currentDialogues);
+  utterance.lang = "fr-FR";
+  utterance.rate = 0.95;
+  speechSynthesis.speak(utterance);
+});
 
   if (!("speechSynthesis" in window)) {
     return alert("Lecture vocale non disponible sur ce navigateur.");
