@@ -849,4 +849,285 @@ $("extractDialogues").addEventListener("click", () => {
 
 $("readDialogues").addEventListener("click", () => {
   if (!currentDialogues) {
-    return alert(
+  
+      "Aucun dialogue à lire. Extrais les dialogues d'abord."
+    );
+  }
+
+  if (!("speechSynthesis" in window)) {
+    return alert("Lecture vocale non disponible sur ce navigateur.");
+  }
+
+  speechSynthesis.cancel();
+
+  const utterance = new SpeechSynthesisUtterance(currentDialogues);
+  utterance.lang = "fr-FR";
+  utterance.rate = 0.95;
+  speechSynthesis.speak(utterance);
+});
+
+$("stopVoice").addEventListener("click", () => {
+  speechSynthesis.cancel();
+});
+
+function formatTime(seconds) {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = Math.floor(seconds % 60);
+
+  return (
+    String(hours).padStart(2, "0") + ":" +
+    String(minutes).padStart(2, "0") + ":" +
+    String(secs).padStart(2, "0") + ",000"
+  );
+}
+
+$("makeSrt").addEventListener("click", () => {
+  if (!currentScenario) {
+    return alert("Génère un scénario d'abord.");
+  }
+
+  const lines = currentScenario.split(/\r?\n/).filter(line => line.trim());
+  const dialogues = lines.filter(line => /^\s*[^:]{1,35}:\s*.+/.test(line));
+
+  if (!dialogues.length) {
+    $("srtStatus").textContent = "Aucun dialogue détecté.";
+    return;
+  }
+
+  let time = 0;
+  const duration = 4;
+
+  currentSrt = dialogues.map((line, index) => {
+    const start = formatTime(time);
+    time += duration;
+    const end = formatTime(time);
+
+    return (index + 1) + "\n" + start + " --> " + end +
+      "\n" + line.trim() + "\n";
+  }).join("\n");
+
+  $("srtStatus").textContent =
+    "Sous-titres créés. Vérifie les timings avant utilisation.";
+});
+
+$("downloadSrt").addEventListener("click", () => {
+  if (!currentSrt) {
+    return alert("Crée les sous-titres d'abord.");
+  }
+
+  downloadFile(
+    safeFilename($("title").value) + ".srt",
+    currentSrt,
+    "text/plain;charset=utf-8"
+  );
+});
+
+checkSession();
+</script>
+</body>
+</html>`;
+
+
+// --------------------------------------------------
+// ROUTES SERVEUR
+// --------------------------------------------------
+
+app.get("/", (req, res) => {
+  res.type("html").send(HTML);
+});
+
+app.get("/api/me", (req, res) => {
+  res.json({
+    authenticated: verifySession(getCookie(req, COOKIE_NAME))
+  });
+});
+
+app.post("/api/login", checkSameOrigin, (req, res) => {
+  const ip = req.ip || "unknown";
+
+  if (!checkLoginLimit(ip)) {
+    return res.status(429).json({
+      success: false,
+      error: "Trop de tentatives. Réessaie dans 15 minutes."
+    });
+  }
+
+  const password = req.body && req.body.password;
+
+  if (typeof password !== "string" || password.length > 200) {
+    recordFailedLogin(ip);
+    return res.status(401).json({
+      success: false,
+      error: "Identifiants incorrects."
+    });
+  }
+
+  const supplied = Buffer.from(password);
+  const expected = Buffer.from(ADMIN_PASSWORD);
+
+  const valid =
+    supplied.length === expected.length &&
+    crypto.timingSafeEqual(supplied, expected);
+
+  if (!valid) {
+    recordFailedLogin(ip);
+    return res.status(401).json({
+      success: false,
+      error: "Identifiants incorrects."
+    });
+  }
+
+  clearFailedLogins(ip);
+
+  setSessionCookie(req, res, createSession());
+
+  res.json({ success: true });
+});
+
+app.post("/api/logout", checkSameOrigin, (req, res) => {
+  clearSessionCookie(req, res);
+  res.json({ success: true });
+});
+
+app.post(
+  "/api/generate",
+  checkSameOrigin,
+  requireAdmin,
+  async (req, res) => {
+    try {
+      if (!OPENROUTER_API_KEY) {
+        return res.status(500).json({
+          success: false,
+          error: "Clé OpenRouter non configurée."
+        });
+      }
+
+      const title = String(req.body.title || "").trim();
+      const idea = String(req.body.idea || "").trim();
+      const style = String(req.body.style || "Aventure éducative");
+      const duration = Number(req.body.duration);
+
+      if (!title || !idea) {
+        return res.status(400).json({
+          success: false,
+          error: "Le titre et l'idée sont obligatoires."
+        });
+      }
+
+      if (title.length > 200 || idea.length > 6000) {
+        return res.status(400).json({
+          success: false,
+          error: "Le titre ou l'idée est trop long."
+        });
+      }
+
+      if (![60, 180, 300].includes(duration)) {
+        return res.status(400).json({
+          success: false,
+          error: "Durée non autorisée."
+        });
+      }
+
+      const prompt = [
+        "Tu es un scénariste professionnel spécialisé en animation.",
+        "Rédige un scénario complet, original et exploitable par une équipe de production.",
+        "Titre : " + title,
+        "Idée : " + idea,
+        "Style : " + style,
+        "Durée cible : " + duration + " secondes.",
+        "",
+        "Structure obligatoire :",
+        "1. Titre et concept de l'épisode.",
+        "2. Personnages présents et leurs motivations.",
+        "3. Résumé de l'histoire.",
+        "4. Découpage détaillé en scènes numérotées.",
+        "5. Pour chaque scène : lieu, moment, ambiance, description visuelle, actions, expressions et mouvements des personnages.",
+        "6. Dialogues complets, avec le nom du personnage avant chaque réplique.",
+        "7. Indications de caméra, cadrage, mouvements et transitions.",
+        "8. Ambiance sonore et effets sonores.",
+        "9. Dénouement et message final.",
+        "",
+        "Respecte la durée demandée.",
+        "Évite les répétitions et les descriptions vagues.",
+        "Ne résume pas les dialogues : écris les répliques réellement prononcées.",
+        "Ne saute aucune scène importante.",
+        "Réponds en français."
+      ].join("\n");
+
+      const response = await fetch(
+        "https://openrouter.ai/api/v1/chat/completions",
+        {
+          method: "POST",
+          headers: {
+            "Authorization": "Bearer " + OPENROUTER_API_KEY,
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://synora-animation.onrender.com",
+            "X-Title": "SYNORA Animation"
+          },
+          body: JSON.stringify({
+            model: process.env.OPENROUTER_MODEL || "openai/gpt-4o-mini",
+            messages: [
+              {
+                role: "system",
+                content: "Tu es un scénariste expert en animation audiovisuelle."
+              },
+              {
+                role: "user",
+                content: prompt
+              }
+            ],
+            temperature: 0.8,
+            max_tokens: 7000
+          })
+        }
+      );
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        console.error("Erreur OpenRouter :", result);
+
+        return res.status(502).json({
+          success: false,
+          error: "Le service IA n'a pas pu générer le scénario. Vérifie la clé, le modèle et les crédits OpenRouter."
+        });
+      }
+
+      const scenario =
+        result.choices &&
+        result.choices[0] &&
+        result.choices[0].message &&
+        result.choices[0].message.content;
+
+      if (!scenario || typeof scenario !== "string") {
+        return res.status(502).json({
+          success: false,
+          error: "La réponse de l'IA est vide."
+        });
+      }
+
+      res.json({
+        success: true,
+        scenario: scenario.trim()
+      });
+
+    } catch (error) {
+      console.error("Erreur génération :", error);
+
+      res.status(500).json({
+        success: false,
+        error: "Une erreur interne est survenue pendant la génération."
+      });
+    }
+  }
+);
+
+
+// --------------------------------------------------
+// DÉMARRAGE DU SERVEUR
+// --------------------------------------------------
+
+app.listen(PORT, "0.0.0.0", () => {
+  console.log("SYNORA Animation démarré sur le port " + PORT);
+});
