@@ -844,7 +844,46 @@ utterance.rate = 0.95;
 speechSynthesis.speak(utterance);
 });
 
+$("extractDialogues").addEventListener("click", () => {
+  if (!currentScenario) {
+    return alert("Génère ou ouvre un scénario d'abord.");
+  }
+
+  const lines = currentScenario.split(/\r?\n/);
+
+  const dialogueLines = lines.filter(line =>
+    /^\s*(MIKE|ZO[ÉE]|ZOE|LUMI|M\.?\s*L[ÉE]ON|BROOK|M\.?\s*DARK)\s*:/i.test(line)
+  );
+
+  currentDialogues = dialogueLines.join("\n");
+
+  $("dialogues").textContent = currentDialogues ||
+    "Aucune réplique reconnue. Vérifie le format des dialogues.";
+});
+
+$("readDialogues").addEventListener("click", () => {
+  if (!currentDialogues) {
+    return alert("Extrais les dialogues avant de lancer la lecture.");
+  }
+
+  if (!("speechSynthesis" in window)) {
+    return alert("La lecture vocale n'est pas disponible.");
+  }
+
+  speechSynthesis.cancel();
+
+  const utterance = new SpeechSynthesisUtterance(currentDialogues);
+  utterance.lang = "fr-FR";
+  utterance.rate = 0.95;
+
+  speechSynthesis.speak(utterance);
+});
+
 $("stopVoice").addEventListener("click", () => {
+  if ("speechSynthesis" in window) {
+    speechSynthesis.cancel();
+  }
+});
   if ("speechSynthesis" in window) speechSynthesis.cancel();
 });
 
